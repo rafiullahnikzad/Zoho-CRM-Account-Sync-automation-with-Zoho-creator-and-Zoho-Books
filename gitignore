@@ -1,0 +1,10 @@
+# Zoho / IDE artifacts
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Sensitive config (never commit real org IDs or connection secrets)
+config.json
+secrets.json
+.env

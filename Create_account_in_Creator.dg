@@ -1,0 +1,151 @@
+/**
+ * Function  : Create_account_in_Creator
+ * Author    : Rafiullah Nikzad
+ * Purpose   : Syncs a Zoho CRM Account record to both Zoho Creator and Zoho Books.
+ *             - If the account exists in Creator → Update it
+ *             - If the account does NOT exist in Creator → Create it
+ *             - If the contact exists in Books → Update it
+ *             - If the contact does NOT exist in Books → Create it
+ *
+ * Trigger   : CRM Workflow / Blueprint / Button on Account module
+ * Parameter : account_id (Int) — The CRM Account record ID
+ *
+ * Connections Required:
+ *   - creator1  : Zoho Creator OAuth connection
+ *   - books     : Zoho Books OAuth connection
+ *
+ * Apps Involved:
+ *   - Zoho CRM       : Source of truth for Account data
+ *   - Zoho Creator   : App = bairquality, Project = project-management
+ *   - Zoho Books     : Organization ID = 783264185
+ */
+
+void automation.Create_account_in_Creator(Int account_id)
+{
+    // ─────────────────────────────────────────────────────────────
+    // STEP 1: Fetch the CRM Account record
+    // ─────────────────────────────────────────────────────────────
+    Get_account = zoho.crm.getRecordById("Accounts", account_id);
+    // info "Get_account -------- >" + Get_account;
+
+    // ─────────────────────────────────────────────────────────────
+    // STEP 2: Build the Creator data map
+    // ─────────────────────────────────────────────────────────────
+    acc_map = Map();
+    acc_map.put("Zcrm_account_id", account_id);
+    acc_map.put("Name", ifnull(Get_account.get("Account_Name"), ""));
+    acc_map.put("Email", ifnull(Get_account.get("Email"), ""));
+    acc_map.put("Phone", ifnull(Get_account.get("Phone"), ""));
+    acc_map.put("Account_Type", ifnull(Get_account.get("Account_Type"), ""));
+
+    // Billing Address sub-map
+    billMap = Map();
+    billMap.put("address_line_1", ifnull(Get_account.get("Billing_Address"), ""));
+    billMap.put("postal_Code", ifnull(Get_account.get("Billing_Zip"), ""));
+    billMap.put("district_city", ifnull(Get_account.get("Billing_City"), ""));
+    billMap.put("State_province", ifnull(Get_account.get("Billing_State"), ""));
+
+    // Shipping Address sub-map
+    ShipMap = Map();
+    ShipMap.put("address_line_1", ifnull(Get_account.get("Shipping_Address"), ""));
+    ShipMap.put("district_city", ifnull(Get_account.get("Shipping_City"), ""));
+    ShipMap.put("postal_Code", ifnull(Get_account.get("Shipping_Zip"), ""));
+    ShipMap.put("state_province", ifnull(Get_account.get("Shipping_State"), ""));
+
+    acc_map.put("Billing_Address", billMap);
+    acc_map.put("Shiping_Address", ShipMap);
+
+    // Parent Account (optional)
+    if(Get_account.get("Parent_Account") != null)
+    {
+        Parent_Account = Get_account.get("Parent_Account").get("name");
+        // info "Parent_Account ------>" + Parent_Account;
+        acc_map.put("Parent_Account", Parent_Account.toString());
+    }
+    // info acc_map;
+
+    // ─────────────────────────────────────────────────────────────
+    // STEP 3: Search for existing record in Zoho Creator
+    // ─────────────────────────────────────────────────────────────
+    filter = "Name == \"" + Get_account.get("Account_Name") + "\"";
+    // info filter;
+    search_account = zoho.creator.getRecords("bairquality", "project-management", "Contacts_for_Admins", filter, 1, 200, "creator1");
+    // info search_account;
+
+    if(search_account.get("code") == 3000)
+    {
+        // Record found → UPDATE
+        Creator_ID = search_account.get("data").get(0).get("ID");
+        info "Account already exists in Zoho Creator ====> Update the Record.     ID = " + Creator_ID;
+        otherParams = Map();
+        update_record = zoho.creator.updateRecord("bairquality", "project-management", "Contacts_for_Admins", Creator_ID.toLong(), acc_map, otherParams, "creator1");
+        info "Record Updated ------ >" + update_record;
+    }
+    else
+    {
+        // Record not found → CREATE
+        info search_account.get("code") + "-----" + filter;
+        info "Account NOT exists in Zoho Creator ====> Create the Record in Add Account Form";
+        option_MAP = Map();
+        create_record = zoho.creator.createRecord("bairquality", "project-management", "Add_Contact", acc_map, option_MAP, "creator1");
+        info "Record Created ------ >" + create_record;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // STEP 4: Sync to Zoho Books
+    // ─────────────────────────────────────────────────────────────
+    name = ifnull(Get_account.get("Account_Name"), "");
+
+    customer_map = Map();
+    customer_map.put("contact_name", name);
+    customer_map.put("billing_address", {
+        "address": ifnull(Get_account.get("Billing_Address"), ""),
+        "zip":     ifnull(Get_account.get("Billing_Zip"), ""),
+        "city":    ifnull(Get_account.get("Billing_City"), ""),
+        "state":   ifnull(Get_account.get("Billing_State"), "")
+    });
+    customer_map.put("shipping_address", {
+        "address": ifnull(Get_account.get("Shipping_Address"), ""),
+        "zip":     ifnull(Get_account.get("Shipping_Zip"), ""),
+        "city":    ifnull(Get_account.get("Shipping_City"), ""),
+        "state":   ifnull(Get_account.get("Shipping_State"), "")
+    });
+    customer_map.put("company_name", name);
+    customer_map.put("email", ifnull(Get_account.get("Email"), ""));
+    // info customer_map;
+
+    // Search for existing contact in Books by name
+    search_contact = invokeurl
+    [
+        url :"https://www.zohoapis.com/books/v3/contacts?contact_name=" + name + "&organization_id=783264185"
+        type :GET
+        connection:"books"
+    ];
+    // info search_contact;
+
+    if(search_contact.get("contacts").size() > 0)
+    {
+        // Contact found → UPDATE
+        contactid = search_contact.get("contacts").get(0).get("contact_id");
+        update_customer = invokeurl
+        [
+            url :"https://www.zohoapis.com/books/v3/contacts/" + contactid + "?organization_id=783264185"
+            type :PUT
+            parameters:customer_map
+            connection:"books"
+        ];
+        info "update customer in books : " + update_customer;
+    }
+    else
+    {
+        // Contact not found → CREATE
+        create_customer = invokeurl
+        [
+            url :"https://www.zohoapis.com/books/v3/contacts?organization_id=783264185"
+            type :POST
+            parameters:customer_map
+            connection:"books"
+        ];
+        info "create customer in Books : " + create_customer;
+    }
+}
