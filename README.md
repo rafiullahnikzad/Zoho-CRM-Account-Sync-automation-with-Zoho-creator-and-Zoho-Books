@@ -151,7 +151,7 @@ ZohoBooks.contacts.UPDATE
 
 | Setting         | Value       |
 |-----------------|-------------|
-| Organization ID | `783264185` |
+| Organization ID | `70000185` |
 
 ---
 
